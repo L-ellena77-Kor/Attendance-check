@@ -147,10 +147,10 @@ function viewStudent(now, rec, late){
     <div class="clock">${rec.t}</div>
     <p class="dim" style="font-size:1.125rem">${late
       ? `기준 시각 ${DEADLINE}을 지났어요. 선생님께 말씀드리세요.`
-      : "이제 방송실로 가면 됩니다."}</p>
+      : "이제 즐거운 하루를 시작하세요."}</p>
     <button id="undo" class="faint under" style="margin-top:2.5rem">잘못 눌렀어요, 취소하기</button>
   ` : `
-    <p class="lead">학교에 도착하면 눌러 주세요.<br>방송실 가기 전에 한 번이면 됩니다.</p>
+    <p class="lead">학교에 도착하면 눌러 주세요.<br>방송실 도착하자마자 누르면 됩니다.</p>
     <button id="go" class="bigbtn"><b>도착했어요</b><span>${busy?"보내는 중":"탭 한 번"}</span></button>
   `;
   return `
