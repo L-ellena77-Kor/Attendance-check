@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1B2A4A">
+<title>아침 등교 확인</title>
+<style>
+  :root{
+    --dawn:#1B2A4A; --ink:#EDF1F8; --dim:rgba(237,241,248,.62);
+    --faint:rgba(237,241,248,.32);
+    --sun:#F0A868; --arrived:#0E6046; --late:#9E2B18;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--dawn); color:var(--ink);
+    font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',-apple-system,sans-serif;
+    transition:background .5s ease;
+    min-height:100dvh; display:flex; flex-direction:column;
+  }
+  body.arrived{background:var(--arrived)}
+  body.late{background:var(--late)}
+  #app{flex:1;display:flex;flex-direction:column;padding:2.5rem 1.75rem;min-height:100dvh}
+  .row{display:flex;align-items:baseline;justify-content:space-between}
+  .mid{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+  .dim{color:var(--dim);font-size:1.0625rem}
+  .faint{color:var(--faint);font-size:1.0625rem}
+  .lead{font-size:1.25rem;color:var(--dim);line-height:1.6;margin-bottom:2rem}
+  button{font:inherit;border:0;cursor:pointer;color:inherit;background:none}
+
+  .bigbtn{
+    width:220px;height:220px;border-radius:50%;background:var(--sun);color:#2A1B08;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    transition:transform .15s ease, box-shadow .6s ease;
+  }
+  .bigbtn:active{transform:scale(.96)}
+  .bigbtn.pulse{box-shadow:0 0 0 26px rgba(240,168,104,.18)}
+  .bigbtn b{font-size:2.125rem;font-weight:800}
+  .bigbtn span{font-size:1rem;opacity:.7;margin-top:.5rem}
+
+  .clock{font-size:4.25rem;font-weight:800;font-variant-numeric:tabular-nums;margin:.5rem 0}
+  .headline{font-size:3.25rem;font-weight:800;letter-spacing:-.03em;line-height:1.1}
+  .under{text-decoration:underline;text-underline-offset:4px}
+
+  .panel{background:rgba(0,0,0,.22);padding:1.75rem;margin:0 -1.75rem -2.5rem}
+  .hist{display:flex;justify-content:space-between;padding:.5rem 0;border-top:1px solid rgba(255,255,255,.12);font-size:1.125rem}
+  .hist .t{font-variant-numeric:tabular-nums}
+  .ghost{background:rgba(255,255,255,.14);border-radius:.75rem;padding:1rem 1.5rem;font-size:1.125rem}
+
+  .dots{display:flex;gap:1rem;margin:0 0 3rem}
+  .dot{width:16px;height:16px;border-radius:50%;background:rgba(237,241,248,.22);transition:background .15s}
+  .dot.on{background:var(--sun)}
+  .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;width:260px}
+  .pad button{height:72px;border-radius:50%;background:rgba(255,255,255,.09);font-size:1.75rem;transition:transform .1s}
+  .pad button:active{transform:scale(.9)}
+  .pad button.bare{background:none}
+  .err{color:var(--sun);font-size:1.0625rem;margin-top:1rem}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* ─────── 설정 ─────── */
+const API      = "https://script.google.com/macros/s/AKfycbxp4T6UU3tC1szR9wqL9S0aitVKAP4AIkuJGpzmKwx9qfLPu_PeB89qFF7PUYnFtEFWwA/exec";
+const NAME     = "방송부";      // 화면에 표시할 이름
+const DEADLINE = "08:50";       // 이 시각까지 누르면 정시
+const PIN      = "0912";        // 선생님 화면 암호
+
+/* ─────── 유틸 ─────── */
+const DAYS = ["일","월","화","수","목","금","토"];
+const p2 = n => String(n).padStart(2,"0");
+const keyOf = d => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+const hhmm  = d => `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+const toMin = t => { const [h,m]=t.split(":").map(Number); return h*60+m; };
+const dueMin = toMin(DEADLINE);
+const longDate = d => `${d.getMonth()+1}월 ${d.getDate()}일 ${DAYS[d.getDay()]}요일`;
+const shortDate = k => { const [y,m,dd]=k.split("-").map(Number);
+  return `${m}/${dd} ${DAYS[new Date(y,m-1,dd).getDay()]}`; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ─────── 상태 ─────── */
+let log = {};
+let role = localStorage.getItem("role") === "teacher" ? "teacher" : "student";
+let screen = role;
+let busy = false, failed = false, synced = null, pin = "", pinWrong = false;
+let timer = null;
+
+/* ─────── 서버 ─────── */
+async function api(params){
+  const q = new URLSearchParams(params).toString();
+  const res = await fetch(`${API}?${q}`, {method:"GET"});
+  if(!res.ok) throw new Error("net");
+  return res.json();
+}
+async function load(){
+  try{ const d = await api({action:"get"}); log = d.days || {}; failed = false; synced = new Date(); }
+  catch(e){ failed = true; }
+}
+async function save(by){
+  busy = true; render();
+  const now = new Date();
+  try{ const d = await api({action:"set", date:keyOf(now), time:hhmm(now), by});
+       log = d.days || {}; failed = false; synced = new Date(); }
+  catch(e){ failed = true; }
+  busy = false; render();
+}
+async function remove(){
+  busy = true; render();
+  try{ const d = await api({action:"del", date:keyOf(new Date())});
+       log = d.days || {}; failed = false; }
+  catch(e){ failed = true; }
+  busy = false; render();
+}
+
+/* ─────── 화면 ─────── */
+function render(){
+  const now = new Date();
+  const today = keyOf(now);
+  const rec = log[today] || null;
+  const late = rec && toMin(rec.t) > dueMin;
+  const nowMin = now.getHours()*60 + now.getMinutes();
+  const overdue = !rec && nowMin > dueMin;
+
+  document.body.className = rec ? (late ? "late" : "arrived") : (overdue && screen==="teacher" ? "late" : "");
+
+  const app = document.getElementById("app");
+  if(screen === "pin")      app.innerHTML = viewPin();
+  else if(screen === "teacher") app.innerHTML = viewTeacher(now, rec, late, overdue, nowMin);
+  else                      app.innerHTML = viewStudent(now, rec, late);
+  bind();
+}
+
+function viewStudent(now, rec, late){
+  const body = rec ? `
+    <p class="dim" style="font-size:1.25rem">선생님께 전달됐어요</p>
+    <div class="clock">${rec.t}</div>
+    <p class="dim" style="font-size:1.125rem">${late
+      ? `기준 시각 ${DEADLINE}을 지났어요. 선생님께 말씀드리세요.`
+      : "이제 방송실로 가면 됩니다."}</p>
+    <button id="undo" class="faint under" style="margin-top:2.5rem">잘못 눌렀어요, 취소하기</button>
+  ` : `
+    <p class="lead">학교에 도착하면 눌러 주세요.<br>방송실 가기 전에 한 번이면 됩니다.</p>
+    <button id="go" class="bigbtn"><b>도착했어요</b><span>${busy?"보내는 중":"탭 한 번"}</span></button>
+  `;
+  return `
+    <div class="row"><span class="dim">${longDate(now)}</span><span class="dim">${hhmm(now)}</span></div>
+    <div class="mid">${body}</div>
+    ${failed ? `<p class="err" style="text-align:center">전송이 안 됐어요. 인터넷을 확인하고 다시 눌러 주세요.</p>`:""}
+    <button id="toPin" class="faint" style="align-self:center;margin-top:1.5rem;opacity:.55">선생님용</button>
+  `;
+}
+
+function viewPin(){
+  const keys = ["1","2","3","4","5","6","7","8","9","","0","←"];
+  return `
+    <button id="back" class="dim" style="align-self:flex-start">뒤로</button>
+    <div class="mid">
+      <p style="font-size:1.125rem;margin-bottom:2rem;color:${pinWrong?"var(--sun)":"var(--dim)"}">
+        ${pinWrong?"암호가 맞지 않아요":"선생님 암호 네 자리"}</p>
+      <div class="dots">${[0,1,2,3].map(i=>`<div class="dot ${i<pin.length?"on":""}"></div>`).join("")}</div>
+      <div class="pad">${keys.map(k=> k===""
+        ? `<div></div>`
+        : `<button class="key ${k==="←"?"bare":""}" data-k="${k}">${k}</button>`).join("")}</div>
+    </div>`;
+}
+
+function viewTeacher(now, rec, late, overdue, nowMin){
+  const past = Object.keys(log).filter(k=>k!==keyOf(now)).sort().reverse().slice(0,7);
+  const main = rec ? `
+    <div class="headline">${rec.t} 도착</div>
+    <p class="dim" style="font-size:1.125rem;margin-top:1rem">${
+      late ? `기준 시각 ${DEADLINE}보다 ${toMin(rec.t)-dueMin}분 늦었습니다`
+           : `기준 시각 ${DEADLINE}보다 ${dueMin-toMin(rec.t)}분 일찍 왔습니다`}${
+      rec.by==="teacher" ? " · 선생님이 직접 표시" : ""}</p>
+    <button id="undo" class="faint under" style="align-self:flex-start;margin-top:2rem">기록 취소</button>
+  ` : `
+    <div class="headline">아직 안 왔어요</div>
+    <p class="dim" style="font-size:1.125rem;margin:1rem 0 2rem">${
+      overdue ? `기준 시각 ${DEADLINE}에서 ${nowMin-dueMin}분 지났습니다`
+              : `${DEADLINE}까지 ${dueMin-nowMin}분 남았습니다`}</p>
+    <button id="mark" class="ghost" style="align-self:flex-start">직접 도착으로 표시</button>
+    <p class="faint" style="margin-top:.75rem">학생이 버튼 누르는 걸 잊었을 때 쓰세요</p>
+  `;
+  return `
+    <div class="row" style="margin-bottom:2.5rem">
+      <span class="dim">${longDate(now)}</span>
+      <button id="refresh" class="dim">${busy?"확인 중":"새로고침"}</button>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
+      <p class="dim" style="font-size:1.125rem;margin-bottom:.5rem">${esc(NAME)}</p>
+      ${main}
+    </div>
+    ${failed?`<p class="err">서버에 연결하지 못했어요. 새로고침해 주세요.</p>`:""}
+    <p class="faint" style="margin-top:1.5rem">${synced?`${hhmm(synced)} 기준 · 25초마다 자동 확인`:""}</p>
+    <div class="panel">
+      ${past.length?`<p class="faint" style="margin-bottom:.75rem">지난 기록</p>${
+        past.map(k=>{const l=toMin(log[k].t)>dueMin;
+        return `<div class="hist"><span>${shortDate(k)}</span>
+          <span class="t" style="color:${l?"var(--sun)":"var(--ink)"}">${log[k].t}${l?"  늦음":""}</span></div>`;
+      }).join("")}`:""}
+      <button id="toStudent" class="faint" style="margin-top:1.25rem">학생 화면 보기</button>
+    </div>`;
+}
+
+/* ─────── 이벤트 ─────── */
+function bind(){
+  const on = (id,fn)=>{ const el=document.getElementById(id); if(el) el.onclick=fn; };
+
+  on("go", e=>{ const b=e.currentTarget; b.classList.add("pulse"); save("student"); });
+  on("undo", ()=>remove());
+  on("mark", ()=>save("teacher"));
+  on("refresh", async ()=>{ busy=true; render(); await load(); busy=false; render(); });
+  on("toPin", ()=>{ pin=""; pinWrong=false; screen="pin"; render(); });
+  on("back", ()=>{ screen="student"; render(); });
+  on("toStudent", ()=>{ screen="student"; render(); });
+
+  document.querySelectorAll(".key").forEach(b=>{
+    b.onclick = ()=>{
+      const k = b.dataset.k;
+      if(k==="←"){ pin = pin.slice(0,-1); render(); return; }
+      if(pin.length>=4) return;
+      pin += k; pinWrong=false; render();
+      if(pin.length===4){
+        setTimeout(()=>{
+          if(pin===PIN){ role="teacher"; localStorage.setItem("role","teacher"); screen="teacher"; render(); startPolling(); }
+          else { pin=""; pinWrong=true; render(); }
+        },180);
+      }
+    };
+  });
+}
+
+function startPolling(){
+  clearInterval(timer);
+  if(screen!=="teacher") return;
+  timer = setInterval(async ()=>{ if(screen==="teacher"){ await load(); render(); } }, 25000);
+}
+
+document.addEventListener("visibilitychange", async ()=>{
+  if(document.visibilityState==="visible"){ await load(); render(); }
+});
+
+/* ─────── 시작 ─────── */
+(async ()=>{
+  render();
+  await load();
+  render();
+  startPolling();
+  setInterval(render, 30000);   // 시계 갱신
+})();
+</script>
+</body>
+</html>
